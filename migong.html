@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>探索地图 - 黑暗迷宫</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body {
+            background: #000;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        canvas {
+            border: 2px solid #333;
+            background: #000;
+            image-rendering: pixelated;
+        }
+        #main-canvas { box-shadow: 0 0 30px rgba(0,0,0,0.8); }
+        #mini-canvas { border-color: #222; opacity: 0.9; }
+        
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 0 2px 4px #000;
+            pointer-events: none;
+        }
+        #win-screen {
+            position: absolute;
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0,0,0,0.9);
+            width: 100%; height: 100%;
+            z-index: 10;
+        }
+        h1 { font-size: 48px; color: #00ffcc; margin-bottom: 20px; }
+        p { font-size: 24px; margin-bottom: 30px; }
+        button {
+            padding: 15px 40px;
+            font-size: 20px;
+            background: #00ffcc;
+            border: none;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover { background: #00e6b8; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">步数: <span id="steps">0</span></div>
+
+    <div id="game-container">
+        <canvas id="main-canvas"></canvas>
+        <canvas id="mini-canvas"></canvas>
+    </div>
+
+    <div id="win-screen">
+        <h1>🎉 探索成功！</h1>
+        <p>总步数: <span id="final-steps">0</span></p>
+        <button onclick="location.reload()">再来一局</button>
+    </div>
+
+    <script>
+        // 1. 配置
+        const COLS = 21; // 必须是奇数，保证迷宫有墙
+        const ROWS = 21; // 必须是奇数
+        const CELL_SIZE = 24;
+        const MINI_SCALE = 0.3; // 小地图缩放比例
+
+        const mainCanvas = document.getElementById('main-canvas');
+        const miniCanvas = document.getElementById('mini-canvas');
+        const ctxMain = mainCanvas.getContext('2d');
+        const ctxMini = miniCanvas.getContext('2d');
+        const stepsEl = document.getElementById('steps');
+        const winScreen = document.getElementById('win-screen');
+        const finalStepsEl = document.getElementById('final-steps');
+
+        // 设置画布尺寸
+        mainCanvas.width = COLS * CELL_SIZE;
+        mainCanvas.height = ROWS * CELL_SIZE;
+        miniCanvas.width = COLS * CELL_SIZE * MINI_SCALE;
+        miniCanvas.height = ROWS * CELL_SIZE * MINI_SCALE;
+
+        // 2. 迷宫生成 (DFS 算法)
+        let grid = [];
+        let visited = [];
+        let player = { x: 0, y: 0 };
+        let exit = { x: 0, y: 0 };
+        let steps = 0;
+        let gameWon = false;
+
+        function initMaze() {
+            // 初始化全墙
+            grid = Array.from({ length: ROWS }, () => Array(COLS).fill(1));
+            visited = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+
+            // DFS 生成迷宫
+            const stack = [];
+            const startX = 1, startY = 1;
+            grid[startY][startX] = 0;
+            visited[startY][startX] = true;
+            stack.push({ x: startX, y: startY });
+
+            const dirs = [
+                { x: 0, y: -2 }, { x: 0, y: 2 },
+                { x: -2, y: 0 }, { x: 2, y: 0 }
+            ];
+
+            while (stack.length > 0) {
+                const current = stack[stack.length - 1];
+                // 随机打乱方向
+                const shuffledDirs = dirs.sort(() => Math.random() - 0.5);
+                let moved = false;
+
+                for (let d of shuffledDirs) {
+                    const nx = current.x + d.x;
+                    const ny = current.y + d.y;
+                    if (nx > 0 && nx < COLS - 1 && ny > 0 && ny < ROWS - 1 && !visited[ny][nx]) {
+                        visited[ny][nx] = true;
+                        grid[ny][nx] = 0;
+                        // 打通墙壁
+                        grid[current.y + d.y / 2][current.x + d.x / 2] = 0;
+                        stack.push({ x: nx, y: ny });
+                        moved = true;
+                        break;
+                    }
+                }
+
+                if (!moved) stack.pop();
+            }
+
+            // 设置起点和终点
+            player = { x: 1, y: ROWS - 2 };
+            exit = { x: COLS - 2, y: 1 };
+            grid[player.y][player.x] = 0;
+            grid[exit.y][exit.x] = 0;
+
+            // 初始化视野：只看到起点
+            visited = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+            visited[player.y][player.x] = true;
+            steps = 0;
+            stepsEl.innerText = steps;
+        }
+
+        // 3. 渲染逻辑
+        function draw() {
+            // 绘制主地图
+            ctxMain.fillStyle = '#000';
+            ctxMain.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    if (visited[y][x]) {
+                        if (grid[y][x] === 1) {
+                            ctxMain.fillStyle = '#333'; // 墙
+                        } else {
+                            ctxMain.fillStyle = '#1a1a1a'; // 路
+                        }
+                        ctxMain.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+
+            // 绘制出口（如果已探索到附近或到达）
+            if (visited[exit.y][exit.x]) {
+                ctxMain.fillStyle = '#00ffcc';
+                ctxMain.beginPath();
+                ctxMain.arc(
+                    exit.x * CELL_SIZE + CELL_SIZE / 2,
+                    exit.y * CELL_SIZE + CELL_SIZE / 2,
+                    CELL_SIZE / 3, 0, Math.PI * 2
+                );
+                ctxMain.fill();
+            }
+
+            // 绘制玩家
+            ctxMain.fillStyle = '#fff';
+            ctxMain.beginPath();
+            ctxMain.arc(
+                player.x * CELL_SIZE + CELL_SIZE / 2,
+                player.y * CELL_SIZE + CELL_SIZE / 2,
+                CELL_SIZE / 2.5, 0, Math.PI * 2
+            );
+            ctxMain.fill();
+
+            // 绘制小地图
+            ctxMini.fillStyle = '#000';
+            ctxMini.fillRect(0, 0, miniCanvas.width, miniCanvas.height);
+            ctxMini.save();
+            ctxMini.scale(MINI_SCALE, MINI_SCALE);
+            
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    if (visited[y][x]) {
+                        ctxMini.fillStyle = grid[y][x] === 1 ? '#555' : '#222';
+                        ctxMini.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+            // 小地图上的玩家
+            ctxMini.fillStyle = '#00ffcc';
+            ctxMini.beginPath();
+            ctxMini.arc(
+                player.x * CELL_SIZE + CELL_SIZE / 2,
+                player.y * CELL_SIZE + CELL_SIZE / 2,
+                CELL_SIZE / 2, 0, Math.PI * 2
+            );
+            ctxMini.fill();
+            ctxMini.restore();
+        }
+
+        // 4. 移动逻辑
+        function move(dx, dy) {
+            if (gameWon) return;
+            const nx = player.x + dx;
+            const ny = player.y + dy;
+
+            if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && grid[ny][nx] === 0) {
+                player.x = nx;
+                player.y = ny;
+                visited[ny][nx] = true;
+                steps++;
+                stepsEl.innerText = steps;
+                draw();
+
+                // 检查胜利
+                if (player.x === exit.x && player.y === exit.y) {
+                    gameWon = true;
+                    finalStepsEl.innerText = steps;
+                    winScreen.style.display = 'flex';
+                }
+            }
+        }
+
+        // 5. 键盘监听
+        window.addEventListener('keydown', e => {
+            if (e.key === 'ArrowUp') move(0, -1);
+            if (e.key === 'ArrowDown') move(0, 1);
+            if (e.key === 'ArrowLeft') move(-1, 0);
+            if (e.key === 'ArrowRight') move(1, 0);
+        });
+
+        // 启动游戏
+        initMaze();
+        draw();
+    </script>
+</body>
+</html>
